@@ -1,175 +1,226 @@
 import streamlit as st
+import gspread
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
-from datetime import date, datetime
+from datetime import date
+import hashlib
 
-st.set_page_config(page_title="App Vendas", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Gestão de Vendas", page_icon="💰", layout="wide")
 
-# CSS personalizado
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .metric-container {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 10px;
-    }
-    .stButton > button {
-        background-color: #ff4b4b;
-        color: white;
-        border-radius: 10px;
-    }
-    .stButton > button:hover {
-        background-color: #ff6b6b;
-    }
+    .main {padding-top: 2rem;}
+    section[data-testid="stSidebar"] {width: 300px;}
 </style>
 """, unsafe_allow_html=True)
 
-# URL da planilha como CSV público (somente leitura)
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1ZV0TfPigj1MvQj4dqqvYgCnQX7TNq-n5RdIS4egh5GA/export?format=csv"
-
-# Inicialização do estado de login
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
+    st.session_state.username = None
+    st.session_state.role = None
 
-# Tela de login
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+@st.cache_resource
+def load_sheets():
+    creds_dict = st.secrets["connections"]["gsheets"]
+    gc = gspread.service_account_from_dict(creds_dict)
+    sh = gc.open_by_url(creds_dict["spreadsheet"])
+    return sh
+
+sh = load_sheets()
+
+@st.cache_data(ttl=60)
+def load_sales_df():
+    ws = sh.worksheet('Página1')
+    all_values = ws.get_all_values()
+    if len(all_values) <= 1:
+        return pd.DataFrame()
+    df = pd.DataFrame(all_values[1:], columns=all_values[0])
+    df['row_num'] = range(2, len(df) + 2)
+    numeric_cols = ['Quantidade', 'Valor_Produto', 'Total_Venda', 'Comissao_Percentual', 'Valor_Comissao']
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    if 'Data_Venda' in df.columns:
+        df['Data_Venda'] = pd.to_datetime(df['Data_Venda'], dayfirst=True, errors='coerce')
+    return df
+
+@st.cache_data(ttl=60)
+def load_users_df():
+    ws = sh.worksheet('usuarios')
+    all_values = ws.get_all_values()
+    if len(all_values) <= 1:
+        return pd.DataFrame()
+    df = pd.DataFrame(all_values[1:], columns=all_values[0])
+    df['row_num'] = range(2, len(df) + 2)
+    return df
+
 if not st.session_state.logged_in:
-    st.markdown("<h1 class='main-header'>📱 App Vendas</h1>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.text_input("Usuário", key="username")
-        st.text_input("Senha", type="password", key="password")
-        if st.button("Entrar", use_container_width=True):
-            if st.session_state.username == "admin" and st.session_state.password == "123456":
-                st.session_state.logged_in = True
+    st.title("🔐 Login")
+    col_login1, col_login2 = st.columns([1, 2])
+    with col_login1:
+        st.image("https://via.placeholder.com/300x200/4A90E2/white?text=Gestão+de+Vendas", use_column_width=True)
+    with col_login2:
+        username = st.text_input("Usuário")
+        password = st.text_input("Senha", type="password")
+        if st.button("Entrar"):
+            users_df = load_users_df()
+            if not users_df.empty:
+                matching_user = users_df[users_df['username'] == username]
+                if not matching_user.empty:
+                    if matching_user.iloc[0]['password_hash'] == hash_password(password):
+                        st.session_state.logged_in = True
+                        st.session_state.username = username
+                        st.session_state.role = matching_user.iloc[0]['role']
+                        st.success("Login realizado com sucesso!")
+                        st.rerun()
+                    else:
+                        st.error("Senha incorreta.")
+                else:
+                    st.error("Usuário não encontrado.")
+            else:
+                st.error("Nenhum usuário cadastrado na planilha 'usuarios'.")
+else:
+    st.sidebar.title("Navegação")
+    st.sidebar.info(f"👤 {st.session_state.username} | {st.session_state.role.upper()}")
+    if st.sidebar.button("🚪 Sair"):
+        st.session_state.logged_in = False
+        st.session_state.username = None
+        st.session_state.role = None
+        st.rerun()
+
+    st.title("💰 Gestão de Vendas")
+    tab1, tab2, tab3, tab4 = st.tabs(["📥 Cadastro de Vendas", "📋 Listagem de Vendas", "📊 Relatórios", "👥 Gerenciamento de Usuários"])
+
+    with tab1:
+        st.subheader("Nova Venda")
+        with st.form("cadastro_venda"):
+            col1, col2 = st.columns(2)
+            with col1:
+                estabelecimento = st.text_input("Estabelecimento")
+                data_venda = st.date_input("Data da Venda", value=date.today()).strftime("%d/%m/%Y")
+                bairro = st.text_input("Bairro")
+                forma_pagamento = st.selectbox("Forma de Pagamento", ["Dinheiro", "Pix", "Cartão", "Boleto"])
+            with col2:
+                produto = st.text_input("Produto")
+                quantidade = st.number_input("Quantidade", min_value=1, step=1)
+                valor_produto = st.number_input("Valor do Produto (R$)", min_value=0.0, format="%.2f", step=0.01)
+                comissao_percentual = st.number_input("Comissão (%)", min_value=0.0, max_value=100.0, step=0.1)
+            total_venda = quantidade * valor_produto
+            valor_comissao = total_venda * (comissao_percentual / 100)
+            col_info1, col_info2 = st.columns(2)
+            col_info1.info(f"**Total Venda: R$ {total_venda:.2f}**")
+            col_info2.info(f"**Comissão: R$ {valor_comissao:.2f}**")
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                submitted = st.form_submit_button("✅ Cadastrar Venda")
+        if submitted:
+            if all([estabelecimento, bairro, produto]):
+                ws = sh.worksheet('Página1')
+                row = [estabelecimento, data_venda, bairro, forma_pagamento, produto, int(quantidade), float(valor_produto), float(total_venda), float(comissao_percentual), float(valor_comissao), 'ativa']
+                ws.append_row(row)
+                st.success("Venda cadastrada com sucesso!")
                 st.rerun()
             else:
-                st.error("Usuário ou senha inválidos!")
-    st.stop()
+                st.error("Preencha todos os campos obrigatórios.")
 
-# Carregamento dos dados
-@st.cache_data
-def load_data():
-    df = pd.read_csv(SHEET_URL)
-    df.columns = df.columns.str.strip().str.lower()
-    return df
+    with tab2:
+        st.subheader("Vendas Ativas")
+        sales_df = load_sales_df()
+        df_ativa = sales_df[sales_df['Status'] == 'ativa'].copy()
+        if not df_ativa.empty:
+            st.dataframe(df_ativa.drop(columns=['row_num', 'Status']), use_container_width=True)
+            st.markdown("---")
+            status_col = sales_df.columns.get_loc('Status') + 1
+            for _, row in df_ativa.iterrows():
+                col1, col2, col3 = st.columns([1, 4, 1])
+                with col1:
+                    st.write(f"**{row['Estabelecimento']}**")
+                with col2:
+                    st.write(f"{row['Produto']} × {int(row['Quantidade'])} | {row['Bairro']} | {row['Data_Venda'].strftime('%d/%m/%Y')} | R$ {row['Total_Venda']:.2f}")
+                with col3:
+                    if st.button("❌ Cancelar", key=f"cancel_sale_{row['row_num']}"):
+                        ws = sh.worksheet('Página1')
+                        ws.update_cell(int(row['row_num']), status_col, 'cancelada')
+                        st.success("Venda cancelada!")
+                        st.rerun()
+        else:
+            st.info("Nenhuma venda ativa.")
 
-df = load_data()
+    with tab3:
+        st.subheader("Relatórios")
+        sales_df = load_sales_df()
+        df_ativa = sales_df[sales_df['Status'] == 'ativa'].copy()
+        if df_ativa.empty:
+            st.info("Nenhuma venda ativa para relatórios.")
+        else:
+            col1, col2, col3 = st.columns(3)
+            total_vendas = len(df_ativa)
+            total_faturamento = df_ativa['Total_Venda'].sum()
+            total_comissoes = df_ativa['Valor_Comissao'].sum()
+            with col1:
+                st.metric("Total Vendas", total_vendas)
+            with col2:
+                st.metric("Faturamento", f"R$ {total_faturamento:.2f}")
+            with col3:
+                st.metric("Comissões", f"R$ {total_comissoes:.2f}")
+            col_g1, col_g2 = st.columns(2)
+            with col_g1:
+                prod_group = df_ativa.groupby('Produto')['Total_Venda'].sum().reset_index()
+                fig1 = px.bar(prod_group, x='Produto', y='Total_Venda', title="Total por Produto")
+                st.plotly_chart(fig1, use_container_width=True)
+            with col_g2:
+                bairro_group = df_ativa.groupby('Bairro')['Total_Venda'].sum().reset_index()
+                fig2 = px.bar(bairro_group, x='Bairro', y='Total_Venda', title="Total por Bairro")
+                st.plotly_chart(fig2, use_container_width=True)
+            col_g3, col_g4 = st.columns(2)
+            with col_g3:
+                forma_counts = df_ativa['Forma_Pagamento'].value_counts()
+                fig3 = px.pie(values=forma_counts.values, names=forma_counts.index, title="Forma de Pagamento")
+                st.plotly_chart(fig3, use_container_width=True)
+            with col_g4:
+                df_ativa['data_date'] = df_ativa['Data_Venda'].dt.date
+                date_group = df_ativa.groupby('data_date')['Total_Venda'].sum().reset_index()
+                fig4 = px.line(date_group, x='data_date', y='Total_Venda', title="Evolução por Data")
+                st.plotly_chart(fig4, use_container_width=True)
 
-# Função para processar dados para relatórios
-def process_df(df_raw):
-    df = df_raw.copy()
-    if 'data' in df.columns:
-        df['data'] = pd.to_datetime(df['data'], dayfirst=True, errors='coerce')
-    if 'total' in df.columns:
-        df['total'] = pd.to_numeric(df['total'].astype(str).str.replace('R\$', '', regex=False).str.replace(',', '.').str.strip(), errors='coerce')
-    if 'quantidade' in df.columns:
-        df['quantidade'] = pd.to_numeric(df['quantidade'], errors='coerce')
-    if 'valor_unitario' in df.columns:
-        df['valor_unitario'] = pd.to_numeric(df['valor_unitario'].astype(str).str.replace('R\$', '', regex=False).str.replace(',', '.').str.strip(), errors='coerce')
-    df = df.dropna(subset=['data', 'total'])
-    return df
-
-processed_df = process_df(df)
-
-# Sidebar para filtros
-st.sidebar.header("Filtros")
-min_date = processed_df['data'].min().date() if not processed_df.empty else date.today()
-max_date = processed_df['data'].max().date() if not processed_df.empty else date.today()
-start_date = st.sidebar.date_input("Data Inicial", min_date, key="start_date")
-end_date = st.sidebar.date_input("Data Final", max_date, key="end_date")
-
-filtered_df = processed_df[(processed_df['data'] >= pd.to_datetime(start_date)) & (processed_df['data'] <= pd.to_datetime(end_date))]
-
-if 'produto' in df.columns:
-    produtos = sorted(df['produto'].dropna().unique())
-    selected_produto = st.sidebar.multiselect("Produto", produtos, default=produtos)
-    filtered_df = filtered_df[filtered_df['produto'].isin(selected_produto)] if selected_produto else filtered_df
-
-# Cabeçalho
-st.markdown("<h1 class='main-header'>📊 Dashboard de Vendas</h1>", unsafe_allow_html=True)
-
-# Métricas
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    st.metric("Total de Vendas", len(filtered_df), delta=None, help="Número de registros")
-with col2:
-    total_receita = filtered_df['total'].sum()
-    st.metric("Receita Total", f"R$ {total_receita:,.2f}", delta=None)
-with col3:
-    avg_ticket = filtered_df['total'].mean() if len(filtered_df) > 0 else 0
-    st.metric("Ticket Médio", f"R$ {avg_ticket:,.2f}", delta=None)
-with col4:
-    total_qtd = filtered_df['quantidade'].sum() if 'quantidade' in filtered_df else 0
-    st.metric("Qtd Total Vendida", f"{total_qtd:,.0f}", delta=None)
-
-# Abas
- tab1, tab2, tab3 = st.tabs(["📝 Cadastro", "📋 Listagem", "📈 Relatórios"])
-
-with tab1:
-    st.header("Cadastro de Nova Venda")
-    """
-    # OBSERVAÇÃO: Como o link é um CSV público de exportação do Google Sheets (somente LEITURA),
-    # não é possível escrever diretamente no arquivo via este app sem autenticação.
-    # Para CADASTRO de novas vendas (escrita), o ideal é usar um Google Forms vinculado à planilha,
-    # garantindo integridade dos dados sem depender de bibliotecas de conexão como gsheets.
-    # Exemplo: Crie um Form -> Link para Sheet -> Compartilhe o link do Form com usuários.
-    # Aqui, o form é para simulação/visualização dos dados a serem cadastrados.
-    """
-    with st.form("cadastro_venda"):
-        col1, col2 = st.columns(2)
-        with col1:
-            data_venda = st.date_input("Data da Venda", value=date.today())
-            produto = st.text_input("Produto")
-            quantidade = st.number_input("Quantidade", min_value=1, step=1)
-        with col2:
-            valor_unitario = st.number_input("Valor Unitário (R$)", min_value=0.01, format="%.2f", step=0.01)
-            total = quantidade * valor_unitario
-            st.number_input("Total (R$)", value=total, disabled=True, format="%.2f")
-        
-        submitted = st.form_submit_button("Simular Cadastro", use_container_width=True)
-        if submitted:
-            nova_venda = {
-                'data': data_venda,
-                'produto': produto,
-                'quantidade': quantidade,
-                'valor_unitario': valor_unitario,
-                'total': total
-            }
-            st.success("✅ Dados simulados com sucesso!")
-            st.json(nova_venda)
-            st.info("📝 Para salvar de verdade, acesse o Google Forms da planilha ou edite manualmente.")
-
-with tab2:
-    st.header("Listagem de Vendas")
-    st.dataframe(filtered_df, use_container_width=True, hide_index=True)
-
-with tab3:
-    st.header("Relatórios")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if not filtered_df.empty and 'produto' in filtered_df.columns:
-            vendas_por_produto = filtered_df.groupby('produto')['total'].sum().reset_index()
-            fig1 = px.bar(vendas_por_produto, x='produto', y='total', title="Vendas por Produto")
-            fig1.update_layout(height=400)
-            st.plotly_chart(fig1, use_container_width=True)
-        
-    with col2:
-        if not filtered_df.empty:
-            vendas_por_data = filtered_df.groupby(filtered_df['data'].dt.date)['total'].sum().reset_index()
-            vendas_por_data['data'] = pd.to_datetime(vendas_por_data['data'])
-            fig2 = px.line(vendas_por_data, x='data', y='total', title="Evolução de Vendas")
-            fig2.update_layout(height=400)
-            st.plotly_chart(fig2, use_container_width=True)
-    
-    if not filtered_df.empty and 'quantidade' in filtered_df.columns:
-        fig3 = px.pie(filtered_df, names='produto', values='quantidade', title="Distribuição de Quantidade por Produto")
-        st.plotly_chart(fig3, use_container_width=True)
+    with tab4:
+        if st.session_state.role != 'admin':
+            st.warning("🔒 Acesso restrito a administradores.")
+        else:
+            st.subheader("Gerenciamento de Usuários")
+            users_df = load_users_df()
+            if not users_df.empty:
+                st.dataframe(users_df[['username', 'role']].drop(columns=['row_num'], errors='ignore'), use_container_width=True)
+            with st.expander("➕ Adicionar Usuário"):
+                new_username = st.text_input("Novo Usuário")
+                new_password = st.text_input("Nova Senha", type="password")
+                new_role = st.selectbox("Role", ["user", "admin"])
+                if st.button("Adicionar"):
+                    if new_username and new_password:
+                        if new_username not in users_df['username'].values:
+                            ws_users = sh.worksheet('usuarios')
+                            hashed_pw = hash_password(new_password)
+                            ws_users.append_row([new_username, hashed_pw, new_role])
+                            st.success("Usuário adicionado!")
+                            st.rerun()
+                        else:
+                            st.error("Usuário já existe.")
+                    else:
+                        st.error("Preencha usuário e senha.")
+            st.markdown("---")
+            if not users_df.empty:
+                for _, row in users_df.iterrows():
+                    col_u1, col_u2 = st.columns([3, 1])
+                    with col_u1:
+                        st.write(f"**{row['username']}** ({row['role']})")
+                    with col_u2:
+                        if st.button("🗑️ Remover", key=f"del_user_{row['row_num']}"):
+                            ws_users = sh.worksheet('usuarios')
+                            ws_users.delete_rows(int(row['row_num']))
+                            st.success("Usuário removido!")
+                            st.rerun()
+            else:
+                st.info("Nenhum usuário encontrado.")
