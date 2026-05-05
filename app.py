@@ -19,7 +19,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-SHEET_NAME = "Vendas Lucas"
+SHEET_NAME = "Gestão de Vendas"
 
 @st.cache_resource
 def load_sheets():
