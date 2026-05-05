@@ -1,4 +1,4 @@
-streamlit==1.31.0
-pandas
-st-gsheets-connection
-plotly
+    streamlit
+    pandas
+    st-gsheets-connection
+    plotly
