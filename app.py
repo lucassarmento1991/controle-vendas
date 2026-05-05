@@ -48,7 +48,7 @@ def init_db():
     # Verificar se admin existe, se não, criar
     cursor.execute("SELECT * FROM users WHERE username = 'admin'")
     if not cursor.fetchone():
-        hashed = hash_password('123456')
+        hashed = hash_password('Inf!@#065')
         cursor.execute("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", ('admin', hashed, 'admin'))
     
     conn.commit()
@@ -168,10 +168,10 @@ else:
         st.subheader("Adicionar Venda")
         col1, col2 = st.columns(2)
         with col1:
-            estabelecimento = st.selectbox("Estabelecimento", ["Loja A", "Loja B", "Loja C"])
+            estabelecimento = st.text_input("Estabelecimento")
             data_venda = st.date_input("Data da Venda", datetime.today())
             bairro = st.text_input("Bairro")
-            forma_pagamento = st.selectbox("Forma de Pagamento", ["Dinheiro", "Cartão", "Pix"])
+            forma_pagamento = st.selectbox("Forma de Pagamento", ["Dinheiro", "Cartão", "Pix","Não Pago"])
         with col2:
             produto = st.text_input("Produto")
             quantidade = st.number_input("Quantidade", min_value=1, value=1)
