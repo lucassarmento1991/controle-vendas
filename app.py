@@ -23,10 +23,10 @@ def init_supabase():
             st.stop()
     return create_client(url, key)
 
-def login_user(client: Client, email: str, password: str):
+def login_user(client: Client, username: str, password: str):
     try:
         hashed_pw = hashlib.sha256(password.encode()).hexdigest()
-        response = client.table('usuarios').select('*').eq('email', email).eq('password_hash', hashed_pw).execute()
+        response = client.table('usuarios').select('*').eq('username', username).eq('password_hash', hashed_pw).execute()
         data = response.data
         if data:
             return data[0]
@@ -50,23 +50,23 @@ if st.session_state.user is None:
     with col1:
         st.image("https://via.placeholder.com/150x150?text=Logo", use_column_width=True)
     with col2:
-        email = st.text_input("Email", placeholder="seu@email.com")
+        username = st.text_input("username", placeholder="seu@email.com")
         password = st.text_input("Senha", type="password")
         if st.button("Entrar", type="primary"):
-            if email and password:
-                user = login_user(st.session_state.client, email, password)
+            if username and password:
+                user = login_user(st.session_state.client, username, password)
                 if user:
                     st.session_state.user = user
-                    st.success(f"Bem-vindo, {user.get('nome', user.get('email', 'Usuário'))}!")
+                    st.success(f"Bem-vindo, {user.get('nome', user.get('username', 'Usuário'))}!")
                     st.rerun()
                 else:
                     st.error("Credenciais inválidas.")
             else:
-                st.warning("Preencha email e senha.")
+                st.warning("Preencha username e senha.")
 else:
     # Sidebar
     st.sidebar.title("Perfil")
-    st.sidebar.write(f"👤 {st.session_state.user.get('nome', st.session_state.user.get('email', 'Usuário'))}")
+    st.sidebar.write(f"👤 {st.session_state.user.get('nome', st.session_state.user.get('username', 'Usuário'))}")
     if st.sidebar.button("Sair"):
         st.session_state.user = None
         st.rerun()
