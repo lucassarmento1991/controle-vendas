@@ -5,9 +5,9 @@ import hashlib
 from supabase import create_client, Client
 from datetime import date, datetime
 
+# 1. INICIALIZAÇÃO RESILIENTE
 st.set_page_config(page_title="Controle de Vendas", layout="wide", page_icon="📊")
 
-# 1. INICIALIZAÇÃO RESILIENTE
 @st.cache_resource
 def init_supabase():
     try:
@@ -20,8 +20,9 @@ def init_supabase():
 
 supabase: Client = init_supabase()
 
-# 2. AUTENTICAÇÃO (Sincronizada com o Hash Real do seu Banco)
+# 2. AUTENTICAÇÃO VIA USERNAME
 def hash_password(password):
+    # Garante que a senha seja tratada como string UTF-8 antes do hash
     return hashlib.sha256(password.encode('utf-8')).hexdigest()
 
 if 'logged_in' not in st.session_state:
@@ -30,16 +31,18 @@ if 'logged_in' not in st.session_state:
 if not st.session_state.logged_in:
     st.title("🔐 Gestão de Vendas")
     with st.form("login_form"):
+        # Strip remove espaços acidentais no início ou fim do usuário
         user_input = st.text_input("Usuário (Username)").strip()
-        pass_input = st.text_input("Senha", type="password")
+        pass_input = st.text_input("Senha", type="password").strip()
         
         if st.form_submit_button("Entrar", use_container_width=True):
             try:
                 res = supabase.table('usuarios').select('*').eq('username', user_input).execute()
-                
                 if res.data:
-                    # Comparamos o hash gerado com o que está EXATAMENTE no seu banco
-                    if res.data[0]['password_hash'] == hash_password(pass_input):
+                    db_hash = res.data[0]['password_hash']
+                    input_hash = hash_password(pass_input)
+                    
+                    if db_hash == input_hash:
                         st.session_state.logged_in = True
                         st.session_state.username = user_input
                         st.rerun()
@@ -101,22 +104,15 @@ with tab1:
             st.success("Venda salva com sucesso!")
             st.cache_data.clear()
 
-# --- ABA GERENCIAR (Apenas Exclusão) ---
+# --- ABA GERENCIAR ---
 with tab2:
     st.header("Gerenciamento de Registros")
-    st.warning("⚠️ Nesta aba a edição está desativada. Use o ícone de lixeira para excluir registros.")
+    st.warning("⚠️ Edição desativada. Use a lixeira para excluir registros.")
     df_excluir = load_data()
     
     if not df_excluir.empty:
         config_view = {col: st.column_config.Column(disabled=True) for col in df_excluir.columns}
-        
-        edited_df = st.data_editor(
-            df_excluir, 
-            num_rows="dynamic", 
-            column_config=config_view, 
-            use_container_width=True,
-            hide_index=True
-        )
+        edited_df = st.data_editor(df_excluir, num_rows="dynamic", column_config=config_view, use_container_width=True, hide_index=True)
         
         if st.button("🗑️ Confirmar Exclusões no Banco", type="primary"):
             orig_ids = set(df_excluir['id'].tolist())
@@ -126,11 +122,11 @@ with tab2:
             if ids_para_deletar:
                 for rid in ids_para_deletar:
                     supabase.table('vendas').delete().eq('id', rid).execute()
-                st.success(f"Registros excluídos com sucesso!")
+                st.success(f"Registros excluídos!")
                 st.cache_data.clear()
                 st.rerun()
 
-# --- ABA RELATÓRIOS (Filtros Expandidos) ---
+# --- ABA RELATÓRIOS ---
 with tab3:
     st.header("Análise de Dados")
     df_rel = load_data()
@@ -146,23 +142,16 @@ with tab3:
                 f_bairro = st.multiselect("Bairros", options=sorted(df_rel['bairro'].unique()))
             with c3:
                 f_pag = st.multiselect("Formas de Pagamento", options=sorted(df_rel['forma_pagamento'].unique()))
-
+        
         df_f = df_rel[(df_rel['data_venda'] >= d_ini) & (df_rel['data_venda'] <= d_fim)]
         if f_est: df_f = df_f[df_f['estabelecimento'].isin(f_est)]
         if f_bairro: df_f = df_f[df_f['bairro'].isin(f_bairro)]
         if f_pag: df_f = df_f[df_f['forma_pagamento'].isin(f_pag)]
-
+        
         if not df_f.empty:
             m1, m2, m3 = st.columns(3)
             m1.metric("Faturamento", f"R$ {df_f['total_venda'].sum():,.2f}")
             m2.metric("Comissões", f"R$ {df_f['valor_comissao'].sum():,.2f}")
             m3.metric("Total Vendas", len(df_f))
-
-            fig = px.bar(df_f, x="data_venda", y="total_venda", color="estabelecimento", barmode="group")
-            st.plotly_chart(fig, use_container_width=True)
             
-            c_g1, c_g2 = st.columns(2)
-            with c_g1:
-                st.plotly_chart(px.pie(df_f, names="forma_pagamento", title="Pagamento"), use_container_width=True)
-            with c_g2:
-                st.plotly_chart(px.pie(df_f, names="bairro", title="Bairro"), use_container_width=True)
+            st.plotly_chart(px.bar(df_f, x="data_venda", y="total_venda", color="estabelecimento", barmode="group"), use_container_width=True)
