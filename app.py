@@ -1,157 +1,136 @@
+# IMPORTANT: In your Supabase database, ensure the 'usuarios' table has a row with:
+# username = 'vendas'
+# password_hash = 'ad1e10c7f2d809520c2191e442ed016ed7507debeaad03d061a97ec69dc2361e'
+# This is the SHA256 hash of 'pao123'. Update the DB and the old password 'lucas123' will no longer work.
+
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import hashlib
+from datetime import date
 from supabase import create_client, Client
-from datetime import date, datetime
+import hashlib
 
-# 1. INICIALIZAÇÃO RESILIENTE
-st.set_page_config(page_title="Controle de Vendas", layout="wide", page_icon="📊")
+st.set_page_config(page_title="Sistema de Controle de Vendas", page_icon="💰", layout="wide")
 
+# Supabase connection
 @st.cache_resource
 def init_supabase():
-    try:
-        url = st.secrets["supabase"]["url"].strip()
-        key = st.secrets["supabase"]["key"].strip()
-        return create_client(url, key)
-    except Exception as e:
-        st.error(f"Erro de Conexão: Verifique os Secrets. {str(e)}")
-        st.stop()
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_ANON_KEY"]
+    return create_client(url, key)
 
 supabase: Client = init_supabase()
 
-# 2. AUTENTICAÇÃO VIA USERNAME
-def hash_password(password):
-    # Garante que a senha seja tratada como string UTF-8 antes do hash
-    return hashlib.sha256(password.encode('utf-8')).hexdigest()
-
-if 'logged_in' not in st.session_state:
+if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
+def authenticate(username: str, password: str) -> bool:
+    st.cache_data.clear()  # Clear cache to ensure fresh data from DB
+    password_hash = hashlib.sha256(password.encode('utf-8')).hexdigest()
+    response = supabase.table('usuarios').select('password_hash').eq('username', username).execute()
+    if not response.data:
+        return False
+    return password_hash == response.data[0]['password_hash']
+
+# Login
 if not st.session_state.logged_in:
-    st.title("🔐 Gestão de Vendas")
-    with st.form("login_form"):
-        # Strip remove espaços acidentais no início ou fim do usuário
-        user_input = st.text_input("Usuário (Username)").strip()
-        pass_input = st.text_input("Senha", type="password").strip()
-        
-        if st.form_submit_button("Entrar", use_container_width=True):
-            try:
-                res = supabase.table('usuarios').select('*').eq('username', user_input).execute()
-                if res.data:
-                    db_hash = res.data[0]['password_hash']
-                    input_hash = hash_password(pass_input)
-                    
-                    if db_hash == input_hash:
-                        st.session_state.logged_in = True
-                        st.session_state.username = user_input
-                        st.rerun()
-                    else:
-                        st.error("Senha incorreta.")
-                else:
-                    st.error("Usuário não encontrado.")
-            except Exception as e:
-                st.error(f"Erro de login: {str(e)}")
-    st.stop()
-
-# 3. INTERFACE E CARREGAMENTO
-st.sidebar.title(f"👤 {st.session_state.username}")
-if st.sidebar.button("Sair"):
-    st.session_state.logged_in = False
-    st.rerun()
-
-@st.cache_data(ttl=60)
-def load_data():
-    res = supabase.table('vendas').select('*').order('data_venda', desc=True).execute()
-    df = pd.DataFrame(res.data)
-    if not df.empty:
-        df['data_venda'] = pd.to_datetime(df['data_venda']).dt.date
-        cols_num = ['quantidade', 'valor_produto', 'total_venda', 'comissao_percentual', 'valor_comissao']
-        for col in cols_num:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
-    return df
-
-tab1, tab2, tab3 = st.tabs(["🛒 Cadastro", "🗑️ Gerenciar Registros", "📊 Relatórios"])
-
-# --- ABA CADASTRO ---
-with tab1:
-    st.header("Novo Cadastro")
-    with st.form("cadastro", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            est = st.text_input("Estabelecimento")
-            dt = st.date_input("Data", value=date.today())
-            br = st.text_input("Bairro")
-            pg = st.selectbox("Pagamento", ["Pix", "Cartão", "Dinheiro", "Boleto", "Não Pago"])
-        with c2:
-            prod = st.text_input("Produto")
-            qtd = st.number_input("Quantidade", min_value=1)
-            val = st.number_input("Valor Unitário", min_value=0.01)
-            com = st.number_input("Comissão %", value=10.0)
-        
-        total = qtd * val
-        v_com = total * (com / 100)
-        
-        if st.form_submit_button("Salvar Venda", use_container_width=True):
-            data = {
-                "estabelecimento": est, "data_venda": dt.isoformat(), "bairro": br,
-                "forma_pagamento": pg, "produto": prod, "quantidade": float(qtd),
-                "valor_produto": float(val), "total_venda": float(total),
-                "comissao_percentual": float(com), "valor_comissao": float(v_com), "status": "ativa"
-            }
-            supabase.table('vendas').insert(data).execute()
-            st.success("Venda salva com sucesso!")
-            st.cache_data.clear()
-
-# --- ABA GERENCIAR ---
-with tab2:
-    st.header("Gerenciamento de Registros")
-    st.warning("⚠️ Edição desativada. Use a lixeira para excluir registros.")
-    df_excluir = load_data()
+    st.title("🔐 Login - Sistema de Controle de Vendas")
+    st.info("**Username: vendas** | **Senha: pao123**\n\nVerifique o hash no banco (comentário acima).")
     
-    if not df_excluir.empty:
-        config_view = {col: st.column_config.Column(disabled=True) for col in df_excluir.columns}
-        edited_df = st.data_editor(df_excluir, num_rows="dynamic", column_config=config_view, use_container_width=True, hide_index=True)
-        
-        if st.button("🗑️ Confirmar Exclusões no Banco", type="primary"):
-            orig_ids = set(df_excluir['id'].tolist())
-            curr_ids = set(edited_df['id'].dropna().tolist())
-            ids_para_deletar = orig_ids - curr_ids
-            
-            if ids_para_deletar:
-                for rid in ids_para_deletar:
-                    supabase.table('vendas').delete().eq('id', rid).execute()
-                st.success(f"Registros excluídos!")
-                st.cache_data.clear()
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        username = st.text_input("Username", placeholder="vendas")
+    with col2:
+        password = st.text_input("Senha", type="password", placeholder="pao123")
+    
+    if st.button("Entrar", type="primary"):
+        if username and password:
+            if authenticate(username, password):
+                st.session_state.logged_in = True
+                st.success("Login bem-sucedido!")
                 st.rerun()
-
-# --- ABA RELATÓRIOS ---
-with tab3:
-    st.header("Análise de Dados")
-    df_rel = load_data()
+            else:
+                st.error("Credenciais inválidas.")
+        else:
+            st.warning("Preencha todos os campos.")
+else:
+    st.title("💰 Sistema de Controle de Vendas")
     
-    if not df_rel.empty:
-        with st.expander("🔍 Filtros Avançados", expanded=True):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                d_ini = st.date_input("De:", value=df_rel['data_venda'].min())
-                d_fim = st.date_input("Até:", value=date.today())
-            with c2:
-                f_est = st.multiselect("Estabelecimentos", options=sorted(df_rel['estabelecimento'].unique()))
-                f_bairro = st.multiselect("Bairros", options=sorted(df_rel['bairro'].unique()))
-            with c3:
-                f_pag = st.multiselect("Formas de Pagamento", options=sorted(df_rel['forma_pagamento'].unique()))
-        
-        df_f = df_rel[(df_rel['data_venda'] >= d_ini) & (df_rel['data_venda'] <= d_fim)]
-        if f_est: df_f = df_f[df_f['estabelecimento'].isin(f_est)]
-        if f_bairro: df_f = df_f[df_f['bairro'].isin(f_bairro)]
-        if f_pag: df_f = df_f[df_f['forma_pagamento'].isin(f_pag)]
-        
-        if not df_f.empty:
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Faturamento", f"R$ {df_f['total_venda'].sum():,.2f}")
-            m2.metric("Comissões", f"R$ {df_f['valor_comissao'].sum():,.2f}")
-            m3.metric("Total Vendas", len(df_f))
+    # Logout
+    if st.sidebar.button("🚪 Sair"):
+        st.session_state.logged_in = False
+        st.rerun()
+    
+    @st.cache_data(ttl=60)
+    def load_sales():
+        return supabase.table('vendas').select('*').order('data_venda', desc=True).execute().data
+    
+    tab1, tab2, tab3 = st.tabs(["📥 Cadastro", "📋 Lista/Exclusão", "📊 Relatórios"])
+    
+    with tab1:
+        st.subheader("Nova Venda")
+        with st.form("new_sale"):
+            col1, col2 = st.columns(2)
+            with col1:
+                produto = st.text_input("Produto", key="prod")
+                quantidade = st.number_input("Quantidade", min_value=1, step=1, key="qtd")
+            with col2:
+                valor_unitario = st.number_input("Valor Unitário (R$)", min_value=0.01, format="%.2f", key="vu")
+                data_venda = st.date_input("Data", value=date.today(), key="data")
             
-            st.plotly_chart(px.bar(df_f, x="data_venda", y="total_venda", color="estabelecimento", barmode="group"), use_container_width=True)
+            total = quantidade * valor_unitario
+            st.number_input("Total (R$)", value=round(total, 2), disabled=True, key="total")
+            
+            if st.form_submit_button("Cadastrar"):
+                if produto.strip():
+                    supabase.table('vendas').insert({
+                        'produto': produto.strip(),
+                        'quantidade': float(quantidade),
+                        'valor_unitario': float(valor_unitario),
+                        'total': float(total),
+                        'data_venda': data_venda.isoformat()
+                    }).execute()
+                    st.success("Venda cadastrada!")
+                    st.rerun()
+                else:
+                    st.error("Produto obrigatório.")
+    
+    with tab2:
+        st.subheader("Vendas (Exclusão disponível | Edição travada)")
+        vendas = load_sales()
+        if vendas:
+            df = pd.DataFrame(vendas)
+            st.dataframe(df, use_container_width=True, hide_index=False)
+            
+            st.subheader("Excluir Venda")
+            if 'id' in df.columns:
+                selected_id = st.selectbox("ID para excluir:", df['id'].tolist())
+                if st.button("Excluir"):
+                    supabase.table('vendas').delete().eq('id', selected_id).execute()
+                    st.success("Excluída!")
+                    st.rerun()
+            else:
+                st.warning("Tabela sem coluna 'id'.")
+        else:
+            st.info("Nenhuma venda.")
+    
+    with tab3:
+        st.subheader("Relatórios")
+        vendas = load_sales()
+        if vendas:
+            df = pd.DataFrame(vendas)
+            col1, col2, col3 = st.columns(3)
+            total_vendas = df['total'].sum()
+            with col1:
+                st.metric("Total Vendas", f"R$ {total_vendas:,.2f}")
+            with col2:
+                st.metric("Qtd. Vendas", len(df))
+            with col3:
+                st.metric("Média", f"R$ {df['total'].mean():,.2f}")
+            
+            st.subheader("Total por Produto")
+            agrupado = df.groupby('produto')['total'].sum().sort_values(ascending=False)
+            st.bar_chart(agrupado)
+            
+            st.dataframe(df)
+        else:
+            st.info("Sem dados para relatórios.")
