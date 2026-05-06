@@ -1,16 +1,30 @@
 import streamlit as st
-import pandas as pd
-import plotly.express as px
 from supabase import create_client, Client
-import hashlib
-from datetime import date
 
-st.set_page_config(page_title="App Vendas", page_icon="📊", layout="wide")
+@st.cache_resource
+def init_supabase():
+    try:
+        # Tenta buscar dentro do bloco [supabase] (conforme seu arquivo)
+        if "supabase" in st.secrets:
+            url = st.secrets["supabase"]["url"].strip()
+            key = st.secrets["supabase"]["key"].strip()
+        # Caso você mude para o formato sem cabeçalho no futuro
+        else:
+            url = st.secrets["SUPABASE_URL"].strip()
+            key = st.secrets["SUPABASE_KEY"].strip()
+            
+        return create_client(url, key)
+    except Exception as e:
+        st.error(f"Erro de Infraestrutura: {str(e)}")
+        st.info("💡 Dica: Verifique se no Streamlit Cloud os Secrets estão exatamente assim:")
+        st.code("""
+[supabase]
+url = "sua_url_aqui"
+key = "sua_chave_aqui"
+        """)
+        st.stop()
 
-# Config Supabase
-url = st.secrets["SUPABASE_URL"].strip()
-key = st.secrets["SUPABASE_KEY"].strip()
-supabase: Client = create_client(url, key)
+supabase: Client = init_supabase()
 
 # Colunas padronizadas
 required_columns = [
