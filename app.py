@@ -1,115 +1,199 @@
 import streamlit as st
+import hashlib
 import pandas as pd
 import plotly.express as px
 from supabase import create_client, Client
-import hashlib
-from datetime import date
+from datetime import datetime
 
 @st.cache_resource
 def get_supabase() -> Client:
-    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+    try:
+        url = st.secrets.get("SUPABASE_URL") or st.secrets.get("supabase", {}).get("url")
+        key = st.secrets.get("SUPABASE_KEY") or st.secrets.get("supabase", {}).get("key")
+        if not url or not key:
+            raise ValueError("Credenciais do Supabase não encontradas.")
+        return create_client(url, key)
+    except Exception as e:
+        st.error(
+            f"Erro ao conectar com Supabase: {str(e)}. "
+            "Configure o arquivo `.streamlit/secrets.toml` com:"
+        )
+        st.code("""
+SUPABASE_URL = "sua_url_aqui"
+SUPABASE_KEY = "sua_chave_aqui"
+        """)
+        st.code("""
+[supabase]
+url = "sua_url_aqui"
+key = "sua_chave_aqui"
+        """)
+        st.stop()
 
 def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode('utf-8')).hexdigest()
+    return hashlib.sha256(password.encode()).hexdigest()
 
-st.set_page_config(page_title="Sistema de Vendas - Supabase", layout="wide")
+
+# hexdigest
 
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
-    st.session_state.user_id = None
-    st.session_state.username = None
+    st.session_state.user_email = None
 
-supabase = get_supabase()
+st.title("App do Lucas - Gerenciamento de Usuários")
 
 if not st.session_state.logged_in:
-    st.title(":lock: Login")
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        st.image("https://supabase.com/assets/images/supabase-heart-full.svg", width=100)
-    with col2:
-        user_input = st.text_input("Nome de Usuário", key="user_input")
-        pass_input = st.text_input("Senha", type="password", key="pass_input")
-        super_debug = st.checkbox("Super Debug")
-        if st.button("Entrar", type="primary"):
-            if user_input and pass_input:
-                data = supabase.table('usuarios').select('*').ilike('username', user_input).execute()
-                if data.data:
-                    user = data.data[0]
-                    generated_hash = hash_password(pass_input)
-                    db_hash = user['password_hash']
-                    if super_debug:
-                        st.write(f"**Generated hash:** `{generated_hash}`")
-                        st.write(f"**DB hash:** `{db_hash}`")
-                    if generated_hash == db_hash:
-                        st.session_state.logged_in = True
-                        st.session_state.user_id = user['id']
-                        st.session_state.username = user['username']
-                        st.success("Login realizado com sucesso!")
+    st.subheader("Login")
+    with st.form("login_form"):
+        email = st.text_input("Email")
+        password = st.text_input("Senha", type="password")
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            login_btn = st.form_submit_button("Entrar")
+        with col2:
+            cadastro_link = st.form_submit_button("Cadastrar novo usuário")
+
+    if login_btn:
+        if email and password:
+            supabase: Client = get_supabase()
+            hashed_pw = hash_password(password)
+            response = (
+                supabase.table('users')
+                .select('id, email')
+                .ilike('email', email)
+                .eq('password_hash', hashed_pw)
+                .execute()
+            )
+            if response.data:
+                st.session_state.logged_in = True
+                st.session_state.user_email = response.data[0]['email']
+                st.success(f"Login realizado com sucesso! Bem-vindo, {st.session_state.user_email}")
+                st.rerun()
+            else:
+                st.error("Email ou senha incorretos.")
+        else:
+            st.error("Preencha email e senha.")
+
+    if cadastro_link:
+        st.session_state.show_cadastro = True
+        st.rerun()
+
+    if 'show_cadastro' in st.session_state and st.session_state.show_cadastro:
+        st.subheader("Cadastro de Novo Usuário")
+        with st.form("cadastro_form"):
+            new_email = st.text_input("Novo Email")
+            new_password = st.text_input("Nova Senha", type="password")
+            confirm_password = st.text_input("Confirmar Senha", type="password")
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                submit_cadastro = st.form_submit_button("Cadastrar")
+            with col2:
+                cancel_btn = st.form_submit_button("Cancelar")
+
+        if submit_cadastro:
+            if new_password != confirm_password:
+                st.error("As senhas não coincidem.")
+            elif not new_email or not new_password:
+                st.error("Preencha todos os campos.")
+            else:
+                supabase: Client = get_supabase()
+                hashed_pw = hash_password(new_password)
+                # Check if exists (case-insensitive)
+                exists_resp = supabase.table('users').select('id').ilike('email', new_email).execute()
+                if exists_resp.data:
+                    st.error("Este email já está cadastrado.")
+                else:
+                    insert_resp = supabase.table('users').insert({
+                        'email': new_email,
+                        'password_hash': hashed_pw
+                    }).execute()
+                    if insert_resp.data:
+                        st.success("Usuário cadastrado com sucesso!")
+                        st.session_state.show_cadastro = False
                         st.rerun()
                     else:
-                        st.error("Senha incorreta!")
-                else:
-                    st.error("Usuário não encontrado!")
-            else:
-                st.warning("Preencha todos os campos.")
+                        st.error("Erro ao cadastrar usuário.")
+
+        if cancel_btn:
+            st.session_state.show_cadastro = False
+            st.rerun()
 else:
-    # Header
-    col1, col2, col3 = st.columns([1, 3, 1])
-    col1.metric("Usuário", st.session_state.username)
-    col3.button("Sair", on_click=lambda: (st.session_state.update(logged_in=False, user_id=None, username=None), st.rerun()))
+    # Sidebar logout
+    st.sidebar.title("Perfil")
+    st.sidebar.info(f"Usuário: {st.session_state.user_email}")
+    if st.sidebar.button("Logout"):
+        st.session_state.logged_in = False
+        st.session_state.user_email = None
+        st.session_state.show_cadastro = False
+        st.rerun()
 
     # Tabs
-    tab1, tab2, tab3 = st.tabs(["📈 Cadastrar Venda", "📋 Listar Vendas", "📊 Gráficos"])
+    tab1, tab2, tab3 = st.tabs(["Cadastro", "Listagem", "Gráficos Plotly"])
+
+    supabase: Client = get_supabase()
 
     with tab1:
-        st.header("Nova Venda")
-        with st.form("venda_form"):
-            data_venda = st.date_input("Data da Venda", value=date.today())
-            valor = st.number_input("Valor (R$)", min_value=0.0, format="%.2f")
-            produto = st.text_input("Produto")
-            descricao = st.text_area("Descrição")
-            col_a, col_b = st.columns(2)
-            with col_a:
-                if st.form_submit_button("Cadastrar Venda"):
-                    result = supabase.table('vendas').insert({
-                        'user_id': st.session_state.user_id,
-                        'data_venda': data_venda.isoformat(),
-                        'valor': float(valor),
-                        'produto': produto,
-                        'descricao': descricao
+        st.subheader("Cadastro de Novo Usuário")
+        with st.form("cadastro_tab"):
+            new_email = st.text_input("Novo Email", key="new_email_tab")
+            new_password = st.text_input("Nova Senha", type="password", key="new_pass_tab")
+            confirm_password = st.text_input("Confirmar Senha", type="password", key="confirm_pass_tab")
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                submit_cadastro = st.form_submit_button("Cadastrar")
+            with col2:
+                pass  # space
+
+        if submit_cadastro:
+            if new_password != confirm_password:
+                st.error("As senhas não coincidem.")
+            elif not new_email or not new_password:
+                st.error("Preencha todos os campos.")
+            else:
+                hashed_pw = hash_password(new_password)
+                exists_resp = supabase.table('users').select('id').ilike('email', new_email).execute()
+                if exists_resp.data:
+                    st.error("Este email já está cadastrado.")
+                else:
+                    insert_resp = supabase.table('users').insert({
+                        'email': new_email,
+                        'password_hash': hashed_pw
                     }).execute()
-                    if result.data:
-                        st.success("Venda cadastrada com sucesso!")
+                    if insert_resp.data:
+                        st.success("Usuário cadastrado com sucesso!")
                         st.rerun()
-            with col_b:
-                st.info("Campos obrigatórios: *data, valor, produto*")
+                    else:
+                        st.error("Erro ao cadastrar usuário.")
 
     with tab2:
-        st.header("Lista de Vendas")
-        vendas_data = supabase.table('vendas').select('*').eq('user_id', st.session_state.user_id).order('data_venda', desc=True).execute()
-        if vendas_data.data:
-            df = pd.DataFrame(vendas_data.data)
-            df['data_venda'] = pd.to_datetime(df['data_venda'])
+        st.subheader("Listagem de Usuários")
+        response = supabase.table('users').select('email, created_at').execute()
+        if response.data:
+            df = pd.DataFrame(response.data)
+            df['created_at'] = pd.to_datetime(df['created_at'])
             st.dataframe(df, use_container_width=True)
         else:
-            st.info("Nenhuma venda cadastrada ainda.")
+            st.info("Nenhum usuário cadastrado.")
 
     with tab3:
-        st.header("Gráficos")
-        vendas_data = supabase.table('vendas').select('*').eq('user_id', st.session_state.user_id).order('data_venda').execute()
-        if vendas_data.data:
-            df = pd.DataFrame(vendas_data.data)
-            df['data_venda'] = pd.to_datetime(df['data_venda'])
+        st.subheader("Gráficos Plotly")
+        response = supabase.table('users').select('email, created_at').execute()
+        if response.data:
+            df = pd.DataFrame(response.data)
+            df['created_at'] = pd.to_datetime(df['created_at'])
+            df['month'] = df['created_at'].dt.to_period('M').astype(str)
+            monthly_counts = df.groupby('month').size().reset_index(name='count')
+            fig = px.bar(
+                monthly_counts,
+                x='month',
+                y='count',
+                title='Número de Usuários por Mês',
+                labels={'month': 'Mês', 'count': 'Quantidade'}
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
-            col1, col2 = st.columns(2)
-            with col1:
-                fig_bar = px.bar(df, x='data_venda', y='valor', title='Vendas por Data',
-                                 color='produto')
-                st.plotly_chart(fig_bar, use_container_width=True)
-            with col2:
-                vendas_produto = df.groupby('produto')['valor'].sum().reset_index()
-                fig_pie = px.pie(vendas_produto, values='valor', names='produto',
-                                 title='Distribuição por Produto')
-                st.plotly_chart(fig_pie, use_container_width=True)
+            # Additional chart: email length histogram
+            df['email_length'] = df['email'].str.len()
+            fig2 = px.histogram(df, x='email_length', nbins=20, title='Distribuição do Tamanho dos Emails')
+            st.plotly_chart(fig2, use_container_width=True)
         else:
-            st.info("Dados insuficientes para gráficos. Cadastre vendas primeiro.")
+            st.info("Nenhum dado para gráficos. Cadastre usuários primeiro.")
