@@ -1,142 +1,111 @@
 import streamlit as st
-import supabase
-from supabase import create_client, Client
-import hashlib
 import pandas as pd
 import plotly.express as px
+from supabase import create_client, Client
+import hashlib
 from datetime import date
 
-# Configuração de login SHA-256
+# Configuração de Página
+st.set_page_config(page_title="Sistema de Vendas Lucas", layout="wide")
+
+# Inicialização segura do cliente Supabase
+@st.cache_resource
+def init_supabase():
+    try:
+        url = st.secrets["supabase"]["url"].strip()
+        key = st.secrets["supabase"]["key"].strip()
+        return create_client(url, key)
+    except Exception as e:
+        st.error(f"Erro de conexão: {str(e)}")
+        st.stop()
+
+supabase: Client = init_supabase()
+
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-CORRECT_HASH = "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8"  # SHA-256 de 'lucas'
-
+# Controle de Sessão
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-    st.title("Login")
-    password = st.text_input("Senha", type="password")
-    if st.button("Entrar"):
-        if hash_password(password) == CORRECT_HASH:
-            st.session_state.logged_in = True
-            st.rerun()
-        else:
-            st.error("Senha incorreta")
+    st.title("🔐 Login Administrativo")
+    with st.form("login_form"):
+        user_input = st.text_input("Usuário").strip()
+        pass_input = st.text_input("Senha", type="password")
+        if st.form_submit_button("Entrar", use_container_width=True):
+            try:
+                hashed_pw = hash_password(pass_input)
+                # Busca na tabela 'usuarios'
+                response = supabase.table('usuarios').select('*').eq('username', user_input).execute()
+                if response.data and response.data[0]['password_hash'] == hashed_pw:
+                    st.session_state.logged_in = True
+                    st.success("Acesso autorizado!")
+                    st.rerun()
+                else:
+                    st.error("Credenciais inválidas.")
+            except Exception as e:
+                st.error(f"Erro de login: {str(e)}")
     st.stop()
 
-# Inicialização do cliente Supabase
-url = st.secrets['supabase']['url'].strip()
-key = st.secrets['supabase']['key'].strip()
-supabase: Client = create_client(url, key)
+# Layout Principal
+st.sidebar.success("Conectado")
+if st.sidebar.button("Sair"):
+    st.session_state.logged_in = False
+    st.rerun()
 
-st.title("App de Vendas - Lucas")
-
-# Tabs
-tab1, tab2 = st.tabs(["Cadastro de Vendas", "Gráficos"])
+tab1, tab2 = st.tabs(["🛒 Cadastro de Vendas", "📊 Dashboard"])
 
 with tab1:
-    st.header("Cadastro de Vendas")
+    st.header("Nova Venda")
+    with st.form("venda_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            estabelecimento = st.text_input("Estabelecimento")
+            data_venda = st.date_input("Data da Venda", value=date.today())
+            bairro = st.text_input("Bairro")
+            forma_pagamento = st.selectbox("Forma de Pagamento", ["Dinheiro", "Pix", "Cartão", "Boleto"])
+        with col2:
+            produto = st.text_input("Produto")
+            quantidade = st.number_input("Quantidade", min_value=1, step=1)
+            valor_unitario = st.number_input("Valor Unitário (R$)", min_value=0.01, format="%.2f")
+            comissao_perc = st.number_input("Comissão (%)", min_value=0.0, max_value=100.0, value=10.0)
 
-    # Bloco de Debug de Colunas na sidebar
-    with st.sidebar:
-        st.subheader("Debug de Colunas")
-        if st.button("Ver Colunas da Tabela 'vendas'"):
+        # Cálculos automáticos
+        total_calculado = quantidade * valor_unitario
+        valor_comissao = total_calculado * (comissao_perc / 100)
+
+        st.markdown(f"**Total da Venda:** R$ {total_calculado:.2f}")
+
+        if st.form_submit_button("💾 Salvar Venda", use_container_width=True):
+            data_insert = {
+                "estabelecimento": estabelecimento,
+                "data_venda": data_venda.isoformat(),
+                "bairro": bairro,
+                "forma_pagamento": forma_pagamento,
+                "produto": produto,
+                "quantidade": int(quantidade),
+                "valor_unitario": float(valor_unitario),
+                "total": float(total_calculado),
+                "comissao_percentual": float(comissao_perc),
+                "valor_comissao": float(valor_comissao)
+            }
             try:
-                response = supabase.table('vendas').select('*').limit(1).execute()
-                if response.data:
-                    cols = list(response.data[0].keys())
-                    st.write("Colunas existentes:")
-                    st.json(cols)
-                else:
-                    st.warning("Tabela 'vendas' está vazia.")
+                supabase.table('vendas').insert(data_insert).execute()
+                st.success("✅ Venda registrada no Supabase!")
             except Exception as e:
-                st.error(f"Erro ao buscar colunas: {str(e)}")
-
-    # Formulário de cadastro
-    col1, col2 = st.columns(2)
-
-    with col1:
-        estabelecimento = st.text_input("Estabelecimento")
-        data_venda = st.date_input("Data da Venda", value=date.today())
-        bairro = st.text_input("Bairro")
-        forma_pagamento = st.selectbox("Forma de Pagamento", ["Dinheiro", "Pix", "Cartão", "Boleto"])
-
-    with col2:
-        produto = st.text_input("Produto")
-        quantidade = st.number_input("Quantidade", min_value=1, step=1)
-        valor_unitario = st.number_input("Valor Unitário (R$)", min_value=0.01, step=0.01, format="%.2f")
-        comissao_percentual = st.number_input("Comissão Percentual (%)", min_value=0.0, max_value=100.0, value=10.0, step=0.1, format="%.1f")
-
-    # Cálculos
-g    total = quantidade * valor_unitario
-    valor_comissao = total * (comissao_percentual / 100)
-
-    col3, col4 = st.columns(2)
-    col3.metric("Total", f"R$ {total:.2f}")
-    col4.metric("Valor da Comissão", f"R$ {valor_comissao:.2f}")
-
-    if st.button("Inserir Venda", type="primary"):
-        data_insert = {
-            'estabelecimento': estabelecimento,
-            'data_venda': data_venda.isoformat(),
-            'bairro': bairro,
-            'forma_pagamento': forma_pagamento,
-            'produto': produto,
-            'quantidade': int(quantidade),
-            'valor_unitario': float(valor_unitario),
-            'total': float(total),
-            'comissao_percentual': float(comissao_percentual),
-            'valor_comissao': float(valor_comissao)
-        }
-        try:
-            response = supabase.table('vendas').insert(data_insert).execute()
-            st.success("Venda inserida com sucesso!")
-            st.balloons()
-            st.rerun()
-        except Exception as e:
-            st.error(f"Erro ao inserir venda (PostgREST): {str(e)}")
-            st.subheader("Dados enviados para debug:")
-            st.json(data_insert)
+                st.error(f"Erro ao salvar: {str(e)}")
 
 with tab2:
-    st.header("Dashboard - Gráficos")
-
+    st.header("Análise de Resultados")
     try:
-        response = supabase.table('vendas').select('*').execute()
-        df = pd.DataFrame(response.data)
-
-        if not df.empty:
-            # Gráfico 1: Total de Vendas por Data
-            df['data_venda'] = pd.to_datetime(df['data_venda'])
-            vendas_por_data = df.groupby('data_venda')['total'].sum().reset_index()
-            fig1 = px.bar(vendas_por_data, x='data_venda', y='total', title='Total de Vendas por Data',
-                          labels={'total': 'Total (R$)', 'data_venda': 'Data'})
-            st.plotly_chart(fig1, use_container_width=True)
-
-            # Gráfico 2: Valor da Comissão por Produto
-            comissao_por_produto = df.groupby('produto')['valor_comissao'].sum().reset_index()
-            fig2 = px.pie(comissao_por_produto, values='valor_comissao', names='produto',
-                          title='Distribuição de Comissões por Produto')
-            st.plotly_chart(fig2, use_container_width=True)
-
-            # Gráfico 3: Top Estabelecimentos por Total
-            top_estabelecimentos = df.groupby('estabelecimento')['total'].sum().reset_index().nlargest(5, 'total')
-            fig3 = px.bar(top_estabelecimentos, x='total', y='estabelecimento', orientation='h',
-                          title='Top 5 Estabelecimentos por Total de Vendas',
-                          labels={'total': 'Total (R$)', 'estabelecimento': 'Estabelecimento'})
-            st.plotly_chart(fig3, use_container_width=True)
-
-            # Estatísticas
-            st.metric("Total Geral de Vendas", f"R$ {df['total'].sum():.2f}")
-            st.metric("Total de Comissões", f"R$ {df['valor_comissao'].sum():.2f}")
-            st.metric("Número de Vendas", len(df))
+        vendas = supabase.table('vendas').select('*').execute()
+        if vendas.data:
+            df = pd.DataFrame(vendas.data)
+            st.metric("Faturamento Total", f"R$ {df['total'].sum():.2f}")
+            fig = px.bar(df, x='produto', y='total', title="Vendas por Produto", color="bairro")
+            st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("\u26a1 Nenhuma venda cadastrada ainda. Cadastre vendas na aba anterior!")
+            st.info("Nenhuma venda encontrada.")
     except Exception as e:
-        st.error(f"Erro ao carregar dados para gráficos: {str(e)}")
-
-# Rodapé
-st.sidebar.markdown("---")
-st.sidebar.markdown("App ajustado para correção de APIError no Supabase.")
+        st.error(f"Erro ao carregar gráficos: {str(e)}")
