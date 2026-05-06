@@ -45,7 +45,7 @@ if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-    st.title("🔐 Acesso Administrativo")
+    st.title("🔐 Gestão de Vendas")
     with st.form("login_form"):
         user_input = st.text_input("Usuário").strip()
         pass_input = st.text_input("Senha", type="password")
@@ -91,7 +91,7 @@ with tab1:
             est = st.text_input("Estabelecimento")
             dt = st.date_input("Data", value=date.today())
             br = st.text_input("Bairro")
-            pg = st.selectbox("Pagamento", ["Pix", "Cartão", "Dinheiro", "Boleto"])
+            pg = st.selectbox("Pagamento", ["Pix", "Cartão", "Dinheiro", "Boleto", "Não Pago"])
         with c2:
             prod = st.text_input("Produto")
             qtd = st.number_input("Quantidade", min_value=1)
