@@ -7,10 +7,12 @@ import hashlib
 @st.cache_resource
 def load_supabase():
     try:
-        url = st.secrets["supabase"]["url"].strip()
-key = st.secrets["supabase"]["key"].strip()
-supabase: create_client = create_client(url, key)
-
+        url = st.secrets["SUPABASE_URL"].strip()
+        key = st.secrets["SUPABASE_KEY"].strip()
+        return create_client(url, key)
+    except Exception as e:
+        st.error(f"Erro ao inicializar Supabase: {str(e)}")
+        st.stop()
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode('utf-8')).hexdigest()
