@@ -3,16 +3,20 @@ import pandas as pd
 from supabase import create_client, Client
 import hashlib
 from datetime import date
+import plotly.express as px
 
-st.set_page_config(page_title="App Vendas", layout="wide")
+st.set_page_config(page_title="App Vendas Lucas", layout="wide")
 
-# Carregar secrets
-SUPABASE_URL = st.secrets['supabase']['url'].strip()
-SUPABASE_KEY = st.secrets['supabase']['key'].strip()
+# Inicialização segura do Supabase
+@st.cache_resource
+def init_supabase():
+    url = st.secrets['supabase']['url'].strip()
+    key = st.secrets['supabase']['key'].strip()
+    return create_client(url, key)
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase: Client = init_supabase()
 
-# Estado da sessão para login
+# Estado da sessão
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.username = None
@@ -20,136 +24,118 @@ if 'logged_in' not in st.session_state:
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-def login():
-    st.title("🔑 Login")
-    username = st.text_input("Usuário")
-    password = st.text_input("Senha", type="password")
-    if st.button("Entrar"):
-        result = supabase.table('users').select('password_hash').eq('username', username).execute()
-        if result.data:
-            stored_hash = result.data[0]['password_hash']
-            if hash_password(password) == stored_hash:
-                st.session_state.logged_in = True
-                st.session_state.username = username
-                st.success("Login realizado com sucesso!")
-                st.rerun()
-            else:
-                st.error("Senha incorreta!")
-        else:
-            st.error("Usuário não encontrado!")
-
+# Interface de Login
 if not st.session_state.logged_in:
-    login()
-else:
-    # Sidebar
-    st.sidebar.title("Menu")
-    if st.sidebar.button("Logout"):
-        st.session_state.logged_in = False
-        st.session_state.username = None
-        st.rerun()
-
-    tab1, tab2, tab3 = st.tabs(["Nova Venda", "Editar Vendas", "Relatórios"])
-
-    with tab1:
-        st.header("Nova Venda")
-        with st.form("nova_venda"):
-            data_venda = st.date_input("Data", value=date.today())
-            produto = st.text_input("Produto")
-            quantidade = st.number_input("Quantidade", min_value=1, step=1)
-            valor_unit = st.number_input("Valor Unitário", min_value=0.01, step=0.01, format="%.2f")
-            total = quantidade * valor_unit
-            st.info(f"Total: R$ {total:.2f}")
-            if st.form_submit_button("Salvar"):
-                data_insert = {
-                    "data": data_venda.isoformat(),
-                    "produto": produto,
-                    "quantidade": float(quantidade),
-                    "valor_unit": float(valor_unit),
-                    "total": float(total),
-                    "usuario": st.session_state.username
-                }
-                result = supabase.table('vendas').insert(data_insert).execute()
+    st.title("🔑 Login Administrativo")
+    with st.form("login_form"):
+        username_input = st.text_input("Usuário").strip()
+        password_input = st.text_input("Senha", type="password")
+        if st.form_submit_button("Entrar", use_container_width=True):
+            try:
+                # CORREÇÃO: Usando a tabela 'usuarios' e coluna 'username' conforme seu banco
+                result = supabase.table('usuarios').select('password_hash').eq('username', username_input).execute()
+                
                 if result.data:
-                    st.success("Venda salva com sucesso!")
-                    st.rerun()
+                    stored_hash = result.data[0]['password_hash']
+                    if hash_password(password_input) == stored_hash:
+                        st.session_state.logged_in = True
+                        st.session_state.username = username_input
+                        st.success("Acesso autorizado!")
+                        st.rerun()
+                    else:
+                        st.error("Senha incorreta!")
                 else:
-                    st.error("Erro ao salvar venda!")
+                    st.error("Usuário não encontrado no banco de dados.")
+            except Exception as e:
+                st.error(f"Erro de Banco (Tabela/Coluna): {str(e)}")
+    st.stop()
 
-    with tab2:
-        st.header("Editar Vendas")
-        vendas = supabase.table('vendas').select("*").eq('usuario', st.session_state.username).order('data').execute()
-        df = pd.DataFrame(vendas.data)
-        if not df.empty:
-            edited_df = st.data_editor(
-                df,
-                column_config={
-                    "data": st.column_config.DateColumn("Data"),
-                    "quantidade": st.column_config.NumberColumn("Quantidade", min_value=0, step=1),
-                    "valor_unit": st.column_config.NumberColumn("Valor Unit.", min_value=0.0, step=0.01, format="%.2f"),
-                    "total": st.column_config.NumberColumn("Total", format="%.2f"),
-                },
-                num_rows="dynamic",
-                use_container_width=True,
-                hide_index=False
-            )
-            if st.button("Salvar Alterações"):
-                for idx, row in edited_df.iterrows():
-                    update_data = {
-                        "data": row['data'].isoformat() if hasattr(row['data'], 'isoformat') else str(row['data']),
-                        "produto": row['produto'],
-                        "quantidade": float(row['quantidade']),
-                        "valor_unit": float(row['valor_unit']),
-                        "total": float(row['total']),
-                    }
-                    supabase.table('vendas').update(update_data).eq('id', row['id']).execute()
-                st.success("Alterações salvas!")
-                st.rerun()
-        else:
-            st.info("Nenhuma venda encontrada.")
+# Dashboard Principal
+st.sidebar.title(f"👤 {st.session_state.username}")
+if st.sidebar.button("Sair"):
+    st.session_state.logged_in = False
+    st.rerun()
 
-    with tab3:
-        st.header("Relatórios e Gráficos")
-        # Filtros dinâmicos
-        prod_result = supabase.table('vendas').select('produto').eq('usuario', st.session_state.username).execute()
-        produtos = ["Todos"] + sorted(list({row['produto'] for row in prod_result.data if row['produto']}));
+tab1, tab2, tab3 = st.tabs(["🛒 Nova Venda", "✏️ Editar Registros", "📊 Relatórios"])
 
-        col1, col2, col3 = st.columns(3)
+with tab1:
+    st.header("Cadastrar Venda")
+    with st.form("venda_form"):
+        col1, col2 = st.columns(2)
         with col1:
-            data_inicio = st.date_input("Data Início", value=date.today())
+            estabelecimento = st.text_input("Estabelecimento")
+            data_venda = st.date_input("Data da Venda", value=date.today())
+            bairro = st.text_input("Bairro")
+            forma_pagamento = st.selectbox("Pagamento", ["Pix", "Cartão", "Dinheiro", "Boleto"])
         with col2:
-            data_fim = st.date_input("Data Fim", value=date.today())
-        with col3:
-            produto_filtro = st.selectbox("Produto", produtos)
+            produto = st.text_input("Produto")
+            quantidade = st.number_input("Quantidade", min_value=1.0, step=1.0)
+            valor_produto = st.number_input("Valor Unitário", min_value=0.01, format="%.2f")
+            comissao_percentual = st.number_input("Comissão (%)", value=10.0)
 
-        # Query filtrada
-        query = supabase.table('vendas').select("*").eq('usuario', st.session_state.username)
-        if data_inicio:
-            query = query.gte('data', data_inicio.isoformat())
-        if data_fim:
-            query = query.lte('data', data_fim.isoformat())
-        if produto_filtro != "Todos":
-            query = query.eq('produto', produto_filtro)
-        result = query.execute()
-        rel_df = pd.DataFrame(result.data)
+        total_venda = quantidade * valor_produto
+        valor_comissao = total_venda * (comissao_percentual / 100)
 
-        if not rel_df.empty:
-            rel_df['data'] = pd.to_datetime(rel_df['data'])
-            rel_df['total'] = pd.to_numeric(rel_df['total'])
+        if st.form_submit_button("Salvar Venda", use_container_width=True):
+            data_insert = {
+                "estabelecimento": estabelecimento,
+                "data_venda": data_venda.isoformat(),
+                "bairro": bairro,
+                "forma_pagamento": forma_pagamento,
+                "produto": produto,
+                "quantidade": float(quantidade),
+                "valor_produto": float(valor_produto),
+                "total_venda": float(total_venda),
+                "comissao_percentual": float(comissao_percentual),
+                "valor_comissao": float(valor_comissao),
+                "status": "ativa"
+            }
+            try:
+                supabase.table('vendas').insert(data_insert).execute()
+                st.success("Venda salva com sucesso!")
+            except Exception as e:
+                st.error(f"Erro ao salvar: {str(e)}")
 
-            st.subheader("Tabela de Vendas")
-            st.dataframe(rel_df)
+with tab2:
+    st.header("Edição de Vendas")
+    try:
+        response = supabase.table('vendas').select("*").execute()
+        df = pd.DataFrame(response.data)
+        if not df.empty:
+            edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True, key="editor_vendas")
+            if st.button("Salvar Alterações"):
+                for index, row in edited_df.iterrows():
+                    # Lógica de update simplificada por ID
+                    id_venda = row.get('id')
+                    if id_venda:
+                        data_update = row.to_dict()
+                        data_update.pop('id', None) # Não altera o ID
+                        supabase.table('vendas').update(data_update).eq('id', id_venda).execute()
+                st.success("Banco de dados atualizado!")
+                st.rerun()
+    except Exception as e:
+        st.error(f"Erro ao carregar edição: {str(e)}")
 
-            st.subheader("Gráficos")
-            col_g1, col_g2 = st.columns(2)
-            with col_g1:
-                fig1 = px.bar(rel_df, x='data', y='total', title="Vendas por Data", color='produto')
-                st.plotly_chart(fig1, use_container_width=True)
-            with col_g2:
-                fig2 = px.pie(rel_df, names='produto', values='total', title="Distribuição por Produto")
-                st.plotly_chart(fig2, use_container_width=True)
-
-            # Totais
-            total_geral = rel_df['total'].sum()
-            st.metric("Total Geral", f"R$ {total_geral:.2f}")
+with tab3:
+    st.header("Filtros e Gráficos")
+    # Filtros simplificados
+    try:
+        res = supabase.table('vendas').select("*").execute()
+        df_rel = pd.DataFrame(res.data)
+        if not df_rel.empty:
+            df_rel['data_venda'] = pd.to_datetime(df_rel['data_venda'])
+            
+            # Sidebar Filtros
+            st.subheader("Filtrar Resultados")
+            lista_bairros = ["Todos"] + list(df_rel['bairro'].unique())
+            bairro_sel = st.selectbox("Selecione o Bairro", lista_bairros)
+            
+            df_filtrado = df_rel if bairro_sel == "Todos" else df_rel[df_rel['bairro'] == bairro_sel]
+            
+            st.metric("Faturamento Filtrado", f"R$ {df_filtrado['total_venda'].sum():.2f}")
+            fig = px.pie(df_filtrado, values='total_venda', names='produto', title="Vendas por Produto")
+            st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("Nenhum dado encontrado com os filtros selecionados.")
+            st.info("Sem dados para relatório.")
+    except Exception as e:
+        st.error(f"Erro no relatório: {str(e)}")
