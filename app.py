@@ -1,200 +1,215 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from supabase import create_client, Client
 import hashlib
+from supabase import create_client, Client
+import datetime
 
 @st.cache_resource
-def load_supabase():
-    try:
-        url = st.secrets["SUPABASE_URL"].strip()
-        key = st.secrets["SUPABASE_KEY"].strip()
-        return create_client(url, key)
-    except Exception as e:
-        st.error(f"Erro ao inicializar Supabase: {str(e)}")
+def init_supabase():
+    if 'supabase' in st.secrets:
+        supabase_secrets = st.secrets['supabase']
+        supabase_url = supabase_secrets.get('SUPABASE_URL', '').strip()
+        supabase_key = supabase_secrets.get('SUPABASE_KEY', '').strip()
+    else:
+        supabase_url = st.secrets.get('SUPABASE_URL', '').strip()
+        supabase_key = st.secrets.get('SUPABASE_KEY', '').strip()
+
+    if not supabase_url or not supabase_key:
+        st.error("Supabase credentials not found in secrets.")
         st.stop()
 
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode('utf-8')).hexdigest()
+    return create_client(supabase_url, supabase_key)
 
-def get_data(sb: Client) -> pd.DataFrame:
-    response = sb.table('vendas').select('*').order('data_venda', desc=True).execute()
-    data = response.data
-    if not data:
-        return pd.DataFrame()
-    df = pd.DataFrame(data)
-    if 'id' in df.columns:
-        df['id'] = df['id'].astype('Int64')
-    df['data_venda'] = pd.to_datetime(df['data_venda'], errors='coerce')
-    num_cols = ['quantidade', 'valor_produto', 'total_venda', 'comissao_percentual', 'valor_comissao']
-    for col in num_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    for col in num_cols:
-        if col in df.columns:
-            df[col] = df[col].astype('float64')
-    return df
+# Initialize session state
+if 'client' not in st.session_state:
+    st.session_state.client = init_supabase()
+client: Client = st.session_state.client
 
-st.set_page_config(page_title="Sistema de Controle de Vendas V3.2", layout="wide")
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.user = None
 
-st.title("🛒 Sistema de Controle de Vendas V3.2")
-st.caption("Remoção de Dependências Externas e Estabilidade (usando hashlib SHA-256)")
+st.title("Sistema de Controle de Vendas V3.3 (Resili\u00eancia de Secrets e CRUD Est\u00e1vel)")
 
-supabase: Client = load_supabase()
-
-if 'user' not in st.session_state:
-    st.header("🔐 Login")
-    col1, col2 = st.columns(2)
+if not st.session_state.logged_in:
+    st.header("Login")
+    col1, col2 = st.columns([3, 1])
     with col1:
-        email = st.text_input("Email", key="login_email")
+        username = st.text_input("Usu\u00e1rio", key="login_user")
     with col2:
-        password = st.text_input("Senha", type="password", key="login_password")
-    if st.button("Entrar", type="primary"):
-        if email and password:
-            response = supabase.table('usuarios').select("id, email, password_hash").eq("email", email).execute()
-            if response.data and hash_password(password) == response.data[0].get("password_hash"):
-                st.session_state.user = {"id": response.data[0]["id"], "email": response.data[0]["email"]}
-                st.success("Login realizado com sucesso!")
+        password = st.text_input("Senha", type="password", key="login_pass")
+    if st.button("Entrar"):
+        if username and password:
+            hashed_pw = hashlib.sha256(password.encode()).hexdigest()
+            response = client.table('usuarios').select('*').eq('usuario', username).eq('senha', hashed_pw).execute()
+            if response.data:
+                st.session_state.logged_in = True
+                st.session_state.user = username
                 st.rerun()
-            else:
-                st.error("Email ou senha incorretos.")
         else:
-            st.warning("Preencha email e senha.")
-else:
-    st.sidebar.success(f"👤 Logado como: {st.session_state.user['email']}")
-    if st.sidebar.button("Sair"):
-        del st.session_state.user
+            st.error("Preencha usu\u00e1rio e senha.")
+    st.stop()
+
+# Logout
+col1, col2 = st.columns([1, 8])
+with col1:
+    if st.button("Logout"):
+        del st.session_state['logged_in']
+        del st.session_state['user']
         st.rerun()
 
-    tab1, tab2 = st.tabs(["📝 Edição", "📊 Relatórios"])
+@st.cache_data(ttl=60)
+def load_data():
+    response = client.table('vendas').select('*').order('data_venda', desc=True).execute()
+    df = pd.DataFrame(response.data)
+    if not df.empty:
+        df['data_venda'] = pd.to_datetime(df['data_venda'], errors='coerce')
+    return df
 
-    with tab1:
-        st.header("Gerenciar Vendas")
-        if 'data_viewed' not in st.session_state or st.session_state.data_viewed is None:
-            st.session_state.data_viewed = get_data(supabase)
-        df_original = st.session_state.data_viewed
+tab1, tab2 = st.tabs(["Edi\u00e7\u00e3o", "Relat\u00f3rios"])
 
-        # Opções para selectbox
-        estabs = sorted(df_original['estabelecimento'].dropna().unique().tolist()) if not df_original.empty else []
-        bairros = sorted(df_original['bairro'].dropna().unique().tolist()) if not df_original.empty else []
-        formas = sorted(df_original['forma_pagamento'].dropna().unique().tolist()) if not df_original.empty else []
-        produtos = sorted(df_original['produto'].dropna().unique().tolist()) if not df_original.empty else []
-        statuses = ["Pendente", "Pago", "Cancelado"]
+with tab1:
+    st.header("CRUD de Vendas")
+    df = load_data()
 
-        column_config = {
-            "id": st.column_config.NumberColumn("ID", disabled=True, required=False),
-            "data_venda": st.column_config.DateColumn("Data da Venda", required=True),
-            "estabelecimento": st.column_config.SelectboxColumn("Estabelecimento", options=estabs, required=True),
-            "bairro": st.column_config.SelectboxColumn("Bairro", options=bairros, required=True),
-            "forma_pagamento": st.column_config.SelectboxColumn("Forma Pagamento", options=formas, required=True),
-            "produto": st.column_config.SelectboxColumn("Produto", options=produtos, required=True),
-            "quantidade": st.column_config.NumberColumn("Quantidade", min_value=1, step=1, format="%.0f"),
-            "valor_produto": st.column_config.NumberColumn("Valor Produto", min_value=0.01, format="%.2f"),
-            "total_venda": st.column_config.NumberColumn("Total Venda", min_value=0.01, format="%.2f"),
-            "comissao_percentual": st.column_config.NumberColumn("Comissão %", min_value=0.0, max_value=100.0, format="%.2f"),
-            "valor_comissao": st.column_config.NumberColumn("Valor Comissão", min_value=0.0, format="%.2f"),
-            "status": st.column_config.SelectboxColumn("Status", options=statuses),
-        }
+    column_config = {
+        "id": st.column_config.TextColumn("ID", disabled=True, width="medium"),
+        "estabelecimento": st.column_config.TextColumn("Estabelecimento", width="medium"),
+        "data_venda": st.column_config.DateColumn("Data da Venda"),
+        "bairro": st.column_config.TextColumn("Bairro"),
+        "forma_pagamento": st.column_config.TextColumn("Forma de Pagamento"),
+        "produto": st.column_config.TextColumn("Produto"),
+        "quantidade": st.column_config.NumberColumn("Quantidade", min_value=0, step=1, format="%.0f"),
+        "valor_produto": st.column_config.NumberColumn("Valor Produto", min_value=0.0, step=0.01, format="%.2f"),
+        "total_venda": st.column_config.NumberColumn("Total Venda", min_value=0.0, step=0.01, format="%.2f"),
+        "comissao_percentual": st.column_config.NumberColumn("Comiss\u00e3o %", min_value=0.0, step=0.1, format="%.1f"),
+        "valor_comissao": st.column_config.NumberColumn("Valor Comiss\u00e3o", min_value=0.0, step=0.01, format="%.2f"),
+        "status": st.column_config.TextColumn("Status"),
+    }
 
-        edited_df = st.data_editor(
-            df_original,
-            column_config=column_config,
-            use_container_width=True,
-            hide_index=False,
-            num_rows="dynamic"
-        )
+    edited_df = st.data_editor(
+        df,
+        column_config=column_config,
+        use_container_width=True,
+        hide_index=False,
+        key="data_editor"
+    )
 
-        if st.button("💾 Salvar Alterações", type="primary"):
-            # Adicionados
-            added_rows = edited_df[pd.isna(edited_df['id'])].drop(columns=['id']).to_dict(orient='records')
-            for row in added_rows:
-                if pd.isna(row.get('data_venda')):
-                    continue
-                row['data_venda'] = row['data_venda'].isoformat()
-                if pd.notna(row.get('quantidade')):
-                    row['quantidade'] = int(row['quantidade'])
-                supabase.table('vendas').insert(row).execute()
+    if st.button("Salvar Altera\u00e7\u00f5es"):
+        orig_ids = set(df['id'].dropna().astype(str))
+        curr_ids = set(edited_df['id'].dropna().astype(str))
+        deleted_ids = orig_ids - curr_ids
 
-            # Deletados
-            edited_ids = edited_df['id'].dropna().unique().tolist()
-            deleted_ids = df_original[~df_original['id'].isin(edited_ids)]['id'].tolist()
-            for id_val in deleted_ids:
-                supabase.table('vendas').delete().eq('id', id_val).execute()
+        # Delete
+        if deleted_ids:
+            client.table('vendas').delete().in_('id', list(deleted_ids)).execute()
 
-            # Atualizados
-            for _, row in edited_df.iterrows():
-                if pd.notna(row['id']) and row['id'] in df_original['id'].values:
-                    orig_row = df_original[df_original['id'] == row['id']].iloc[0]
-                    if not row.equals(orig_row):
-                        update_dict = row.drop('id').to_dict()
-                        if pd.notna(update_dict.get('data_venda')):
-                            update_dict['data_venda'] = update_dict['data_venda'].isoformat()
-                        if pd.notna(update_dict.get('quantidade')):
-                            update_dict['quantidade'] = int(update_dict['quantidade'])
-                        supabase.table('vendas').update(update_dict).eq('id', row['id']).execute()
+        # Added (id NaN)
+        added_df = edited_df[edited_df['id'].isna()]
+        if not added_df.empty:
+            for _, row in added_df.iterrows():
+                data = row.drop('id').to_dict()
+                if pd.notna(data['data_venda']):
+                    data['data_venda'] = pd.Timestamp(data['data_venda']).isoformat()
+                else:
+                    data['data_venda'] = None
+                client.table('vendas').insert(data).execute()
 
-            st.success("✅ Alterações salvas com sucesso!")
-            st.session_state.data_viewed = get_data(supabase)
-            st.rerun()
+        # Updated/Upsert
+        updated_df = edited_df[~edited_df['id'].isna()]
+        if not updated_df.empty:
+            data_list = []
+            for _, row in updated_df.iterrows():
+                data = row.to_dict()
+                if pd.notna(data['data_venda']):
+                    data['data_venda'] = pd.Timestamp(data['data_venda']).isoformat()
+                else:
+                    data['data_venda'] = None
+                data_list.append(data)
+            client.table('vendas').upsert(data_list, on_conflict='id').execute()
 
-    with tab2:
-        st.header("Relatórios e Gráficos")
-        df_report = get_data(supabase)
-        if df_report.empty:
-            st.info("Nenhum dado disponível para relatórios.")
-        else:
-            col1, col2, col3, col4, col5 = st.columns(5)
-            estabs_u = sorted(df_report['estabelecimento'].dropna().unique())
-            f_estab = col1.multiselect("Estabelecimento", estabs_u, default=estabs_u)
-            bairros_u = sorted(df_report['bairro'].dropna().unique())
-            f_bairro = col2.multiselect("Bairro", bairros_u, default=bairros_u)
-            formas_u = sorted(df_report['forma_pagamento'].dropna().unique())
-            f_forma = col3.multiselect("Forma Pagamento", formas_u, default=formas_u)
-            prods_u = sorted(df_report['produto'].dropna().unique())
-            f_prod = col4.multiselect("Produto", prods_u, default=prods_u)
-            col5.markdown("**Data**")
+        st.success("Altera\u00e7\u00f5es salvas com sucesso!")
+        st.rerun()
 
-            min_date = st.date_input("Data Inicial", value=df_report['data_venda'].min().date())
-            max_date = st.date_input("Data Final", value=df_report['data_venda'].max().date())
+with tab2:
+    st.header("Relat\u00f3rios")
+    df_report = load_data()
+    if df_report.empty:
+        st.info("Nenhum registro de vendas encontrado.")
+        st.stop()
 
-            filtered_df = df_report.copy()
-            if f_estab:
-                filtered_df = filtered_df[filtered_df['estabelecimento'].isin(f_estab)]
-            if f_bairro:
-                filtered_df = filtered_df[filtered_df['bairro'].isin(f_bairro)]
-            if f_forma:
-                filtered_df = filtered_df[filtered_df['forma_pagamento'].isin(f_forma)]
-            if f_prod:
-                filtered_df = filtered_df[filtered_df['produto'].isin(f_prod)]
-            if pd.notna(min_date):
-                filtered_df = filtered_df[filtered_df['data_venda'] >= pd.to_datetime(min_date)]
-            if pd.notna(max_date):
-                filtered_df = filtered_df[filtered_df['data_venda'] <= pd.to_datetime(max_date)]
+    # Filters
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        unique_estabs = sorted(df_report['estabelecimento'].unique())
+        estabs = st.multiselect("Estabelecimento", options=unique_estabs)
+    with col2:
+        unique_bairros = sorted(df_report['bairro'].dropna().unique())
+        bairros = st.multiselect("Bairro", options=unique_bairros)
+    with col3:
+        unique_status = sorted(df_report['status'].unique())
+        status_filter = st.multiselect("Status", options=unique_status)
 
-            if filtered_df.empty:
-                st.info("Nenhum registro encontrado com os filtros aplicados.")
-            else:
-                col_a, col_b, col_c = st.columns(3)
-                total_vendas = filtered_df['total_venda'].sum()
-                total_comissao = filtered_df['valor_comissao'].sum()
-                qtd_vendas = len(filtered_df)
-                col_a.metric("Total Vendas", f"R$ {total_vendas:,.2f}")
-                col_b.metric("Total Comissão", f"R$ {total_comissao:,.2f}")
-                col_c.metric("Qtd. Vendas", qtd_vendas)
+    col1, col2 = st.columns(2)
+    min_date = df_report['data_venda'].min().date()
+    max_date = df_report['data_venda'].max().date()
+    with col1:
+        data_ini = st.date_input("Data Inicial", value=min_date, min_value=min_date, max_value=max_date)
+    with col2:
+        data_fim = st.date_input("Data Final", value=max_date, min_value=min_date, max_value=max_date)
 
-                st.subheader("📈 Gráficos")
-                fig1 = px.bar(filtered_df.groupby('produto')['total_venda'].sum().reset_index(), x='produto', y='total_venda', title="Total Vendas por Produto")
-                st.plotly_chart(fig1, use_container_width=True)
+    df_filt = df_report.copy()
+    if estabs:
+        df_filt = df_filt[df_filt['estabelecimento'].isin(estabs)]
+    if bairros:
+        df_filt = df_filt[df_filt['bairro'].isin(bairros)]
+    if status_filter:
+        df_filt = df_filt[df_filt['status'].isin(status_filter)]
+    df_filt = df_filt[(df_filt['data_venda'].dt.date >= data_ini) & (df_filt['data_venda'].dt.date <= data_fim)]
 
-                fig2 = px.pie(filtered_df, names='forma_pagamento', values='total_venda', title="Distribuição por Forma de Pagamento")
-                st.plotly_chart(fig2, use_container_width=True)
+    if df_filt.empty:
+        st.info("Nenhum dado com os filtros selecionados.")
+        st.stop()
 
-                fig3 = px.bar(filtered_df.groupby('bairro')['total_venda'].sum().reset_index(), x='bairro', y='total_venda', title="Total Vendas por Bairro")
-                st.plotly_chart(fig3, use_container_width=True)
+    # Metrics
+    col1, col2, col3, col4 = st.columns(4)
+    total_vendas = df_filt['total_venda'].sum()
+    total_comissao = df_filt['valor_comissao'].sum()
+    qtd_vendas = len(df_filt)
+    qtd_produtos = df_filt['quantidade'].sum()
 
-                daily_sales = filtered_df.groupby(filtered_df['data_venda'].dt.date)['total_venda'].sum().reset_index()
-                fig4 = px.line(daily_sales, x='data_venda', y='total_venda', title="Vendas por Data")
-                st.plotly_chart(fig4, use_container_width=True)
+    with col1:
+        st.metric("Total Vendas", f"R$ {total_vendas:,.2f}")
+    with col2:
+        st.metric("Total Comiss\u00f5es", f"R$ {total_comissao:,.2f}")
+    with col3:
+        st.metric("Qtd. Vendas", qtd_vendas)
+    with col4:
+        st.metric("Qtd. Produtos", f"{qtd_produtos:,.0f}")
 
-                fig5 = px.scatter(filtered_df, x='total_venda', y='valor_comissao', color='estabelecimento', size='quantidade', hover_data=['produto'], title="Comissão vs Total Venda")
-                st.plotly_chart(fig5, use_container_width=True)
+    # Charts
+    st.subheader("Vendas por Estabelecimento")
+    vendas_estab = df_filt.groupby('estabelecimento')['total_venda'].sum().reset_index()
+    fig1 = px.bar(vendas_estab, x='estabelecimento', y='total_venda', title="Total de Vendas por Estabelecimento")
+    st.plotly_chart(fig1, use_container_width=True)
+
+    st.subheader("Distribui\u00e7\u00e3o por Forma de Pagamento")
+    fig2 = px.pie(df_filt, names='forma_pagamento', values='total_venda', title="Vendas por Forma de Pagamento")
+    st.plotly_chart(fig2, use_container_width=True)
+
+    st.subheader("Vendas ao Longo do Tempo")
+    daily_sales = df_filt.groupby(df_filt['data_venda'].dt.date)['total_venda'].sum().sort_index().reset_index()
+    daily_sales.columns = ['data_venda', 'total_venda']
+    fig3 = px.line(daily_sales, x='data_venda', y='total_venda', title="Vendas Di\u00e1rias")
+    st.plotly_chart(fig3, use_container_width=True)
+
+    st.subheader("Top 10 Produtos")
+    top_produtos = df_filt.groupby('produto')['total_venda'].sum().sort_values(ascending=False).head(10).reset_index()
+    fig4 = px.bar(top_produtos, x='produto', y='total_venda', title="Top 10 Produtos por Valor de Venda")
+    st.plotly_chart(fig4, use_container_width=True)
+
+    st.subheader("Comiss\u00f5es por Estabelecimento")
+    comissao_estab = df_filt.groupby('estabelecimento')['valor_comissao'].sum().reset_index()
+    fig5 = px.bar(comissao_estab, x='estabelecimento', y='valor_comissao', title="Comiss\u00f5es por Estabelecimento")
+    st.plotly_chart(fig5, use_container_width=True)
