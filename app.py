@@ -1,70 +1,58 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 import hashlib
 from supabase import create_client, Client
+from datetime import date, datetime
 
-# 1. INICIALIZAÇÃO E LIMPEZA DE CACHE
-st.set_page_config(page_title="Controle de Vendas", layout="wide")
+# 1. INICIALIZAÇÃO RESILIENTE
+st.set_page_config(page_title="Controle de Vendas", layout="wide", page_icon="📊")
 
 @st.cache_resource
 def init_supabase():
-    # Pega as chaves direto dos Secrets do Streamlit Cloud
-    url = st.secrets["supabase"]["url"].strip()
-    key = st.secrets["supabase"]["key"].strip()
-    return create_client(url, key)
+    try:
+        url = st.secrets["supabase"]["url"].strip()
+        key = st.secrets["supabase"]["key"].strip()
+        return create_client(url, key)
+    except Exception as e:
+        st.error(f"Erro de Conexão: Verifique os Secrets. {str(e)}")
+        st.stop()
 
 supabase: Client = init_supabase()
 
+# 2. AUTENTICAÇÃO VIA USERNAME
 def hash_password(password):
+    # Garante que a senha seja tratada como string UTF-8 antes do hash
     return hashlib.sha256(password.encode('utf-8')).hexdigest()
 
-# 2. LÓGICA DE LOGIN COM LIMPEZA DE MEMÓRIA
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-    st.title("🔐 Acesso ao Sistema")
-    
+    st.title("🔐 Gestão de Vendas")
     with st.form("login_form"):
-        user_input = st.text_input("Usuário").strip()
-        pass_input = st.text_input("Senha", type="password")
+        # Strip remove espaços acidentais no início ou fim do usuário
+        user_input = st.text_input("Usuário (Username)").strip()
+        pass_input = st.text_input("Senha", type="password").strip()
         
         if st.form_submit_button("Entrar", use_container_width=True):
-            # Limpa qualquer cache de dados anterior para garantir consulta nova
-            st.cache_data.clear()
-            
             try:
-                # Consulta direta na tabela 'usuarios'
                 res = supabase.table('usuarios').select('*').eq('username', user_input).execute()
-                
                 if res.data:
-                    # Este é o hash que vem DO BANCO no momento do clique
                     db_hash = res.data[0]['password_hash']
-                    # Este é o hash da senha que você DIGITOU
                     input_hash = hash_password(pass_input)
                     
                     if db_hash == input_hash:
                         st.session_state.logged_in = True
                         st.session_state.username = user_input
-                        st.success("Login realizado!")
                         st.rerun()
                     else:
                         st.error("Senha incorreta.")
-                        # Debug para você conferir se o hash que o Python gera é o mesmo do banco
-                        # st.info(f"Hash gerado agora: {input_hash}") 
                 else:
-                    st.error("Usuário não encontrado no banco de dados.")
+                    st.error("Usuário não encontrado.")
             except Exception as e:
-                st.error(f"Erro de conexão com o Supabase: {str(e)}")
+                st.error(f"Erro de login: {str(e)}")
     st.stop()
-
-# 3. INTERFACE PÓS-LOGIN
-st.sidebar.write(f"Conectado como: **{st.session_state.username}**")
-if st.sidebar.button("Sair"):
-    st.session_state.logged_in = False
-    st.rerun()
-
-st.write("### Sistema Liberado")
 
 # 3. INTERFACE E CARREGAMENTO
 st.sidebar.title(f"👤 {st.session_state.username}")
